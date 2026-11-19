@@ -29,6 +29,7 @@ from plan_edit import plan_edit
 from render_short import render
 from safety_check import check_clip
 from schedule import cap_period_start, hype_slots_left, in_upload_window
+from track_shorts import run as track_shorts, summary as tracker_summary
 from transcribe_clip import load_model, transcribe
 from upload_youtube import AuthExpired, QuotaExceeded, build_metadata, upload
 
@@ -55,9 +56,11 @@ def _remove(path: str | None):
 
 def expire_stale(conn, cfg):
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=cfg["max_clip_age_hours"])).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Reposts are days old by design, so they're exempt.
     n = conn.execute(
         f"UPDATE clips SET status = 'skipped', error = 'too old', updated_at = ? "
-        f"WHERE status IN {IN_PROGRESS} AND created_at < ?", (clip_db.now_iso(), cutoff),
+        f"WHERE status IN {IN_PROGRESS} AND created_at < ? AND COALESCE(source, '') != 'repost'",
+        (clip_db.now_iso(), cutoff),
     ).rowcount
     conn.commit()
     if n:
@@ -81,11 +84,13 @@ def expire_stale(conn, cfg):
 
 
 def by_priority(rows, hype_open: bool) -> list:
-    """Fresh hype clips first (strongest chat spike first) while hype upload slots remain; then most-viewed clips.
+    """Fresh hype clips first (strongest chat spike first) while hype upload slots remain; then reposts of flops
+    you deleted (oldest first); then most-viewed clips.
     With no hype slots left, hype clips are dropped from consideration so they don't clog the render backlog."""
     hype = sorted((r for r in rows if r["source"] == "hype"), key=lambda r: -(r["hype_score"] or 0))
-    rest = sorted((r for r in rows if r["source"] != "hype"), key=lambda r: -(r["view_count"] or 0))
-    return (hype if hype_open else []) + rest
+    reposts = sorted((r for r in rows if r["source"] == "repost"), key=lambda r: r["updated_at"] or "")
+    rest = sorted((r for r in rows if r["source"] not in ("hype", "repost")), key=lambda r: -(r["view_count"] or 0))
+    return (hype if hype_open else []) + reposts + rest
 
 
 
@@ -146,8 +151,11 @@ def process(conn, cfg):
                 words = json.loads(Path(row["transcript_path"]).read_text(encoding="utf-8"))["words"]
                 recent = [r[0] for r in conn.execute(
                     "SELECT hook FROM clips WHERE hook IS NOT NULL ORDER BY updated_at DESC LIMIT 10")]
+                before = conn.execute("SELECT title, hook FROM shorts WHERE clip_id = ?", (cid,)).fetchall()
+                recent += [b["hook"] for b in before if b["hook"]]
                 plan = plan_edit(Path(row["source_path"]), words, row["broadcaster_name"], row["title"],
-                                 cfg.get("edit_max_seconds", 20), recent_hooks=recent)
+                                 cfg.get("edit_max_seconds", 20), recent_hooks=recent,
+                                 previous_titles=[b["title"] for b in before if b["title"]])
                 clip_db.update(conn, cid, trim_start=plan.start, trim_end=plan.end, hook=plan.hook,
                                tags=json.dumps(plan.tags), yt_title=plan.title)
                 log.info(f"Edit plan [{plan.note}, ${plan.cost:.4f}] {plan.start:.1f}-{plan.end:.1f}s "
@@ -158,7 +166,8 @@ def process(conn, cfg):
                              start=row["trim_start"] or 0.0, end=row["trim_end"], hook=row["hook"])
                 clip_db.update(conn, cid, status="rendered", render_path=str(out))
                 _remove(row["source_path"])
-                label = f"hype x{row['hype_score']}" if kind == "hype" else f"{row['view_count']}v"
+                label = (f"hype x{row['hype_score']}" if kind == "hype" else
+                         "repost" if row["source"] == "repost" else f"{row['view_count']}v")
                 log.info(f"Rendered  {row['broadcaster_name']} ({label}): {row['title']!r} -> {out.name}")
                 slots[kind] -= 1
         except Exception as e:
@@ -234,7 +243,8 @@ def try_upload(conn, cfg) -> bool:
         clip_db.update(conn, row["clip_id"], status="uploaded", youtube_id=vid, yt_title=meta["title"], uploaded_at=clip_db.now_iso())
         _remove(row["render_path"])
         _remove(row["transcript_path"])
-        log.info(f"Uploaded  [{cfg['youtube_privacy']}] https://youtube.com/shorts/{vid}  {meta['title']!r}")
+        kind = ", repost" if row["source"] == "repost" else ""
+        log.info(f"Uploaded  [{cfg['youtube_privacy']}{kind}] https://youtube.com/shorts/{vid}  {meta['title']!r}")
         return True
     return True
 
@@ -270,6 +280,8 @@ def main():
     uploads_paused_until = None
     hype_thread = None
     run_hype = not args.once and not os.getenv("CLIP_DB")  # never from one-off or scratch-DB test runs
+    run_tracker = not os.getenv("CLIP_DB")  # a scratch DB would overwrite the real sheet with test rows
+    last_track = 0.0
 
     while True:
         cfg = load_config()  # pick up config.json edits without restarting
@@ -291,6 +303,13 @@ def main():
                 pass
             elif not try_upload(conn, cfg):
                 uploads_paused_until = datetime.now(timezone.utc) + timedelta(hours=12)
+
+            tcfg = cfg.get("tracker", {})
+            if run_tracker and tcfg.get("enabled") and time.time() - last_track >= tcfg.get("refresh_minutes", 60) * 60:
+                last_track = time.time()
+                for note in track_shorts(conn, cfg):
+                    (log.warning if "DELETE" in note or "sign" in note else log.info)(note)
+                log.info(f"Tracker: {tracker_summary(conn)}")
         except Exception as e:  # never let one bad cycle kill the agent
             log.exception(f"Cycle error: {e}")
         finally:

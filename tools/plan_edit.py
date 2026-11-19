@@ -111,8 +111,9 @@ def _clean_hook(hook: str) -> str | None:
 
 
 def plan_edit(video: Path, words: list[dict], streamer: str, clip_title: str = "", max_seconds: float = 20.0,
-              recent_hooks: list[str] | None = None) -> EditPlan:
-    """recent_hooks: hooks used on the last few uploads, so the channel doesn't repeat itself."""
+              recent_hooks: list[str] | None = None, previous_titles: list[str] | None = None) -> EditPlan:
+    """recent_hooks: hooks used on the last few uploads, so the channel doesn't repeat itself.
+    previous_titles: set when this is a repost of a flop; the new title must take a different angle."""
     dur = duration(video)
     fb_start, fb_end = fallback_window(dur, max_seconds)
 
@@ -129,7 +130,9 @@ def plan_edit(video: Path, words: list[dict], streamer: str, clip_title: str = "
         f"Clip length: {dur:.1f}s\nStreamer: {streamer}\n"
         f"Twitch clip title (viewer-written): {clip_title or '(none)'}\n"
         f"Recent hooks on the channel (don't repeat their wording or pattern): {' / '.join(recent_hooks or []) or '(none)'}\n"
-        f"Transcript:\n{_timed_transcript(words)}"
+        + (f"This clip was uploaded before and flopped under these titles, so write a title with a clearly different "
+           f"angle: {' / '.join(previous_titles)}\n" if previous_titles else "")
+        + f"Transcript:\n{_timed_transcript(words)}"
     )})
 
     try:

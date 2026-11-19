@@ -2,6 +2,7 @@
 
 Status flow: queued -> downloaded -> transcribed -> rendered -> uploaded
 Side exits:  duplicate (same moment clipped by someone else), skipped, failed
+Reposts:     a flopped Short you delete goes uploaded -> queued again with source 'repost' (track_shorts.py)
 
 CLI:
     python tools/clip_db.py                 # status counts
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS clips (
     hook             TEXT,          -- on-screen hook banner text
     tags             TEXT,          -- JSON list of clip-specific tags
     hype_score       REAL,          -- source='hype': chat spike size (x normal level)
+    reposts          INTEGER DEFAULT 0,  -- times re-uploaded after a flop (source becomes 'repost')
     error            TEXT,
     attempts         INTEGER DEFAULT 0,
     discovered_at    TEXT,
@@ -54,6 +56,33 @@ CREATE TABLE IF NOT EXISTS clips (
 );
 CREATE INDEX IF NOT EXISTS idx_status ON clips(status);
 CREATE INDEX IF NOT EXISTS idx_broadcaster ON clips(broadcaster_id, created_at);
+
+-- One row per YouTube upload (a repost gets its own row), kept by track_shorts.py.
+CREATE TABLE IF NOT EXISTS shorts (
+    youtube_id   TEXT PRIMARY KEY,
+    clip_id      TEXT,
+    streamer     TEXT,
+    title        TEXT,
+    hook         TEXT,
+    source       TEXT,
+    spoiler      INTEGER,
+    repost_no    INTEGER DEFAULT 0,  -- 0 = first upload, 1 = the re-upload of a flop
+    uploaded_at  TEXT,
+    public_since TEXT,               -- first time the tracker saw it public (UTC ISO)
+    privacy      TEXT,
+    state        TEXT DEFAULT 'live',  -- live | deleted | removed (by YouTube)
+    views        INTEGER,
+    likes        INTEGER,
+    comments     INTEGER,
+    views_12h    INTEGER,            -- views at N hours after going public
+    views_24h    INTEGER,
+    views_48h    INTEGER,
+    views_72h    INTEGER,
+    flagged      INTEGER DEFAULT 0,  -- 1 = told the user to delete + repost it
+    verdict      TEXT,
+    reposted_as  TEXT,
+    checked_at   TEXT
+);
 """
 
 
@@ -72,7 +101,7 @@ def connect() -> sqlite3.Connection:
     # Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them to an existing DB.
     existing = {r["name"] for r in conn.execute("PRAGMA table_info(clips)")}
     for col, kind in (("safety", "TEXT"), ("spoiler", "INTEGER"), ("trim_start", "REAL"), ("trim_end", "REAL"),
-                      ("hook", "TEXT"), ("tags", "TEXT"), ("hype_score", "REAL")):
+                      ("hook", "TEXT"), ("tags", "TEXT"), ("hype_score", "REAL"), ("reposts", "INTEGER DEFAULT 0")):
         if col not in existing:
             conn.execute(f"ALTER TABLE clips ADD COLUMN {col} {kind}")
     conn.commit()

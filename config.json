@@ -42,6 +42,14 @@
     "max_age_hours": 6
   },
 
+  "tracker": {
+    "enabled": true,
+    "refresh_minutes": 60,
+    "judge_after_hours": 48,
+    "min_views": 100,
+    "auto_repost": true
+  },
+
   "poll_minutes": 15,
   "render_batch_size": 2,
   "whisper_model": "large-v3-turbo"

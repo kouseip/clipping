@@ -11,6 +11,7 @@ clean word-by-word captions and streamer credit, and upload to the clipping chan
 | `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` | Yes | `.env` | Free app at https://dev.twitch.tv/console/apps (needs 2FA on the Twitch account) |
 | `credentials.json` | For upload | project root | Google Cloud OAuth client, type **Desktop app**, with **YouTube Data API v3** enabled |
 | `token_youtube.json` | For upload | project root | Created by `python tools/google_auth.py youtube`. Sign in with the account that owns the clipping channel (pick the Brand Account channel if asked) |
+| `token.json` | For the tracker sheet | project root | Created by `python tools/google_auth.py`. Sign in with your **main** Google account (the sheet lives in its Drive; Brand Accounts have no Drive) |
 
 **OAuth consent screen must be "In production", not "Testing".** In Testing, Google refresh tokens expire after
 7 days and uploads silently stop. Publishing an unverified personal app is fine — click through the
@@ -30,7 +31,8 @@ clean word-by-word captions and streamer credit, and upload to the clipping chan
 | 6 | `tools/upload_youtube.py` | Builds description/tags (with credit + links) and uploads |
 | 1b | `tools/hype_detector.py` | Background thread: reads chat (anonymous IRC) on the top live English GTA 6 streams, detects spikes vs. each channel's normal level (hype emotes weigh extra, "clip it" triple), creates a 30s Twitch clip via the API and queues it as `source='hype'`. Needs `tools/twitch_user_auth.py` once. `--dry-run` logs spikes without clipping |
 | — | `tools/twitch_user_auth.py` | Twitch device-code sign-in (scope `clips:edit`) → `token_twitch.json` (gitignored), auto-refreshed |
-| — | `tools/run_pipeline.py` | The agent: runs 1→5 every `poll_minutes`, enforces pacing, cleans up files |
+| 7 | `tools/track_shorts.py` | Every `tracker.refresh_minutes`: views/likes/comments per Short from YouTube (free, 1 quota unit per 50 videos), snapshots at 12/24/48/72h public, flags flops "DELETE + repost", requeues a flagged Short once you delete it, and rewrites the Google Sheet "hotmicclipsYT Shorts tracker" (tabs Shorts + By streamer). Run by hand: `python tools/track_shorts.py [--no-sheet]` |
+| — | `tools/run_pipeline.py` | The agent: runs 1→7 every `poll_minutes`, enforces pacing, cleans up files |
 | — | `tools/clip_db.py` | Inspect state: `python tools/clip_db.py` (counts), `... list rendered` |
 
 Run it: `start_clipper.bat` (loop) · `start_clipper.bat --once --no-upload` (render-only test pass).
@@ -42,6 +44,7 @@ To restart onto new code: close the "GTA 6 Clip Agent" window and run `start_cli
 
 ## Outputs
 - **Deliverable:** Shorts on the YouTube channel. The uploaded clip's YouTube ID is in `data/clips.db`; log in `data/pipeline.log`.
+- **Deliverable:** the Google Sheet tracker (its ID is saved in `data/tracker.json`; deleted from Drive → a new one is made).
 - **Intermediates:** `.tmp/clips` (deleted after render), `.tmp/renders` + `.tmp/transcripts` (deleted after upload).
 - **State:** `data/clips.db` is NOT disposable — it prevents duplicate uploads. Don't delete it.
 
@@ -69,11 +72,23 @@ of viewer clips, with their own render slot (one rendered hype clip waiting at a
 delays them; the agent also wakes between cycles when one is queued. Out of hype slots → hype clips are ignored
 until tomorrow and expire after `max_age_hours`. Hype clips appear publicly on the streamer's Twitch channel
 under the signed-in account's name.
+
+**Delete + repost (flops):** a first upload still under `tracker.min_views` (100) after `tracker.judge_after_hours`
+(48) public gets Verdict "DELETE + repost" in the sheet and a WARNING in the log. The user deletes it in YouTube
+Studio (deleting stays manual on purpose: it's irreversible, and the token has no delete scope). On the next
+refresh the tracker sees it gone and requeues the clip as `source='repost'`: it's re-downloaded from Twitch,
+re-planned with a **new title and hook** (plan_edit is told the old ones), and uploaded ahead of regular clips
+(after fresh hype clips) in a normal slot, so on a different day than the original. Reposts never expire as "too old". Only one
+repost per clip; a repost that flops too shows "Flopped twice (leave it)". Deleting a Short the tracker didn't flag
+does nothing. If the streamer deleted the Twitch clip, the repost fails 3 times and is marked `failed`.
+The 48h clock starts when the tracker first sees a Short public (YouTube's `publishedAt` isn't reliable for
+private→public videos), so a verdict can come a few hours late but never early.
 | `max_uploads_per_day` | 5 | Counted from each day's `upload_window` start (local midnight if no window). First-two-weeks plan (from 2026-11-19): 5/day, then raise if views per Short hold |
 | `max_uploads_per_streamer_per_day` | 2 | Keeps the feed varied |
 | `min_minutes_between_uploads` | 150 | Spacing; ≈ window length / max_uploads_per_day |
 | `upload_window` | 11:00–23:00 | Uploads only happen inside this window (PC local time, Central). Remove the key to upload around the clock |
 | `youtube_privacy` | private | Start `private` to review in YouTube Studio; switch to `public` once output is trusted |
+| `tracker.*` | see config.json | `enabled` true, `refresh_minutes` 60, `judge_after_hours` 48, `min_views` 100 (the growth video's rule: under ~100 views after 2 days = missed the algorithm), `auto_repost` true (false = flag only, never requeue) |
 | `poll_minutes` / `render_batch_size` | 15 / 2 | Cycle interval; how many rendered clips to keep ready (small = fresher clips at 5/day) |
 | `whisper_model` | large-v3-turbo | Use `distil-large-v3` or `small` if VRAM is tight |
 
@@ -87,6 +102,9 @@ Edits to `config.json` take effect next cycle — no restart needed.
   clips stay queued (not failed). Fix: `python tools/google_auth.py youtube --force` (pick hotmicclipsYT), then
   uploads resume next cycle. `--force` matters: without it a still-valid token just refreshes and the 7-day clock
   keeps running. Calendar reminder set for 2026-11-25 12:00 CT (token minted ~22:30 CT on 11-18).
+- **Sheets sign-in expired** (same 7-day rule; token.json minted 2026-11-19) → tracker still updates the DB and
+  still requeues reposts, only the sheet goes stale; log warns hourly. Renew both tokens in one go:
+  `python tools/google_auth.py renew` (first sign-in: pick hotmicclipsYT; second: your main account).
 - **Twitch 429** → client waits for `Ratelimit-Reset`. **401** → re-mints the app token.
 - **Category not found** → falls back to Twitch category search. If GTA VI is listed under another name, set `game_name`.
 - **No speech in clip** → renders with credit only; title falls back to the Twitch clip title.
@@ -114,6 +132,8 @@ Edits to `config.json` take effect next cycle — no restart needed.
 5. Kick / YouTube Live sources.
 6. ~~Run at logon~~ — done 2026-11-18 (Startup-folder shortcut + crash-restart loop + single-instance lock).
 7. ~~Spoiler guard~~ — done 2026-11-18 (flag from safety_check → "SPOILER:" title prefix).
+8. ~~Performance scoreboard + delete/repost tracker~~ — done 2026-11-19 (`track_shorts.py`, Google Sheet).
+   Use it for the 2-week volume review: views per Short by streamer, hype vs. regular, spoiler vs. not.
 
 ## Learnings
 - 2026-11-18: YouTube removed the "unverified API project → forced private" rule on **Nov 2, 2026**, and since
@@ -161,3 +181,10 @@ Edits to `config.json` take effect next cycle — no restart needed.
   `download_clip.py` now retries 404s (5 × 15s).
 - 2026-11-18: Haiku copied the prompt's example hook pattern ("WAIT FOR THE …") — varied examples + passing the
   last 10 hooks fixed it. Watch for other repeated patterns in titles.
+- 2026-11-19: YouTube `snippet.publishedAt` is not a reliable "went public" time: two Shorts uploaded private and
+  made public later showed ~3 min after upload, and a still-private one showed a time from the next morning. The
+  tracker uses "first seen public" instead.
+- 2026-11-19: The growth video's delete/repost rule: a good Short stuck under ~100 views after 2 days probably
+  missed the algorithm; delete it, change the title, re-upload on a different day (their 47-view flop went to
+  ~6M on the re-upload). Built as the tracker's DELETE + repost flag; renders are deleted after upload, so a
+  repost re-downloads the Twitch clip.

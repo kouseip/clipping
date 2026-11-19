@@ -1,10 +1,10 @@
 """Google OAuth helper shared by every tool that talks to Sheets, Slides, Drive, or YouTube.
 
 First-time setup (once per token):
-    python tools/google_auth.py            # Sheets / Slides / Drive  -> token.json
-    python tools/google_auth.py youtube    # YouTube uploads          -> token_youtube.json
+    python tools/google_auth.py            # Sheets / Slides / Drive  -> token.json   (your main Google account)
+    python tools/google_auth.py youtube    # YouTube uploads          -> token_youtube.json  (pick hotmicclipsYT)
     python tools/google_auth.py youtube --force   # fresh sign-in even if the token still works
-                                                  # (Testing-mode apps: do this every <7 days)
+    python tools/google_auth.py renew      # both, fresh (Testing-mode apps: do this every <7 days)
 Each opens a browser for consent. Later runs refresh the token silently.
 YouTube gets its own token so the channel's Google account can differ from your Sheets account.
 
@@ -83,13 +83,28 @@ def get_service(api: str, version: str, scopes: list[str] = SCOPES, token_file: 
     return build(api, version, credentials=creds, cache_discovery=False)
 
 
+def _youtube(force: bool):
+    creds = get_credentials(YOUTUBE_SCOPES, YOUTUBE_TOKEN_FILE, force=force)
+    yt = build("youtube", "v3", credentials=creds, cache_discovery=False)
+    print(f"YouTube authorized. Token saved to {YOUTUBE_TOKEN_FILE}")
+    for ch in yt.channels().list(part="snippet", mine=True).execute().get("items", []):
+        print(f"Uploads will go to channel: {ch['snippet']['title']}  (https://youtube.com/channel/{ch['id']})")
+
+
+def _sheets(force: bool):
+    get_credentials(force=force)
+    print(f"Sheets authorized. Token saved to {TOKEN_FILE}")
+
+
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "youtube":
-        creds = get_credentials(YOUTUBE_SCOPES, YOUTUBE_TOKEN_FILE, force="--force" in sys.argv)
-        yt = build("youtube", "v3", credentials=creds, cache_discovery=False)
-        print(f"YouTube authorized. Token saved to {YOUTUBE_TOKEN_FILE}")
-        for ch in yt.channels().list(part="snippet", mine=True).execute().get("items", []):
-            print(f"Uploads will go to channel: {ch['snippet']['title']}  (https://youtube.com/channel/{ch['id']})")
+    mode = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else ""
+    force = "--force" in sys.argv
+    if mode == "youtube":
+        _youtube(force)
+    elif mode == "renew":
+        print("1/2  YouTube: pick the hotmicclipsYT channel")
+        _youtube(True)
+        print("2/2  Sheets: pick your main Google account")
+        _sheets(True)
     else:
-        get_credentials()
-        print(f"Authorized. Token saved to {TOKEN_FILE}")
+        _sheets(force)
