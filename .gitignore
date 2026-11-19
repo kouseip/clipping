@@ -1,0 +1,25 @@
+# Secrets — never commit
+.env
+credentials.json
+token.json
+token_*.json
+*.pem
+*.key
+
+# Disposable intermediates
+.tmp/*
+!.tmp/.gitkeep
+
+# Persistent pipeline state (clip DB, logs)
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/

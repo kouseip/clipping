@@ -1,0 +1,16 @@
+# Core
+python-dotenv>=1.0
+requests>=2.32
+
+# Google APIs (Sheets, Slides, Drive, YouTube)
+google-api-python-client>=2.150
+google-auth-oauthlib>=1.2
+google-auth-httplib2>=0.2
+
+# Clip pipeline
+anthropic>=2.10   # Shorts titles via Claude Haiku 5.5
+yt-dlp>=2025.1.1
+faster-whisper>=1.1
+# CUDA runtime for faster-whisper on NVIDIA GPUs (ctranslate2 needs CUDA 12 + cuDNN 9)
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*
