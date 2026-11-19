@@ -22,11 +22,13 @@ from pathlib import Path
 import clip_db
 from _common import DATA_DIR, load_config
 from download_clip import download
+from hype_detector import start_background as start_hype
 from fetch_twitch_clips import fetch
 from google_auth import YOUTUBE_TOKEN_FILE
 from plan_edit import plan_edit
 from render_short import render
 from safety_check import check_clip
+from schedule import cap_period_start, hype_slots_left, in_upload_window
 from transcribe_clip import load_model, transcribe
 from upload_youtube import AuthExpired, QuotaExceeded, build_metadata, upload
 
@@ -61,34 +63,35 @@ def expire_stale(conn, cfg):
     if n:
         log.info(f"Skipped {n} clips older than {cfg['max_clip_age_hours']}h")
 
-
-def _window_times(cfg):
-    win = cfg.get("upload_window")
-    if not win:
-        return None
-    return datetime.strptime(win["start"], "%H:%M").time(), datetime.strptime(win["end"], "%H:%M").time()
-
-
-def in_upload_window(cfg) -> bool:
-    """upload_window {"start": "11:00", "end": "23:00"} in PC local time; supports windows that cross midnight."""
-    times = _window_times(cfg)
-    if not times:
-        return True
-    start, end = times
-    now = datetime.now().time()
-    return start <= now < end if start <= end else (now >= start or now < end)
+    # Hype clips are only worth it while the moment is fresh; drop them (and any rendered file) after max_age_hours.
+    hype_hours = cfg.get("hype", {}).get("max_age_hours", 6)
+    hype_cutoff = (datetime.now(timezone.utc) - timedelta(hours=hype_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stale = conn.execute(
+        f"SELECT clip_id, source_path, transcript_path, render_path FROM clips WHERE source = 'hype' "
+        f"AND status IN ('queued', 'downloaded', 'transcribed', 'rendered') AND created_at < ?", (hype_cutoff,),
+    ).fetchall()
+    for r in stale:
+        clip_db.update(conn, r["clip_id"], status="skipped", error=f"stale hype clip (> {hype_hours}h)")
+        for p in (r["source_path"], r["transcript_path"], r["render_path"]):
+            _remove(p)
+    if stale:
+        log.info(f"Skipped {len(stale)} hype clips older than {hype_hours}h")
 
 
-def cap_period_start(cfg) -> datetime:
-    """Daily caps count uploads since the latest window opening (or local midnight without a window).
-    A rolling 24h count would let late-night uploads eat into the next day's quota."""
-    times = _window_times(cfg)
-    local_now = datetime.now().astimezone()
-    start = local_now.replace(hour=times[0].hour if times else 0, minute=times[0].minute if times else 0,
-                              second=0, microsecond=0)
-    if start > local_now:
-        start -= timedelta(days=1)
-    return start.astimezone(timezone.utc)
+
+
+def by_priority(rows, hype_open: bool) -> list:
+    """Fresh hype clips first (strongest chat spike first) while hype upload slots remain; then most-viewed clips.
+    With no hype slots left, hype clips are dropped from consideration so they don't clog the render backlog."""
+    hype = sorted((r for r in rows if r["source"] == "hype"), key=lambda r: -(r["hype_score"] or 0))
+    rest = sorted((r for r in rows if r["source"] != "hype"), key=lambda r: -(r["view_count"] or 0))
+    return (hype if hype_open else []) + rest
+
+
+
+
+
+
 
 
 def streamer_capped(conn, cfg, broadcaster_id: str) -> bool:
@@ -96,17 +99,22 @@ def streamer_capped(conn, cfg, broadcaster_id: str) -> bool:
 
 
 def process(conn, cfg):
-    """Render just enough clips to keep a small ready-to-upload backlog (no wasted GPU time or disk)."""
-    backlog = conn.execute("SELECT COUNT(*) FROM clips WHERE status = 'rendered'").fetchone()[0]
-    slots = cfg["render_batch_size"] - backlog
-    if slots <= 0:
+    """Render just enough clips to keep a small ready-to-upload backlog (no wasted GPU time or disk).
+    Hype clips get their own slot (one rendered and waiting at a time) so a full regular backlog
+    never makes a fresh moment wait."""
+    hype_open = hype_slots_left(conn, cfg) > 0
+    rendered = [r["source"] for r in conn.execute("SELECT source FROM clips WHERE status = 'rendered'")]
+    slots = {
+        "regular": cfg["render_batch_size"] - sum(s != "hype" for s in rendered),
+        "hype": (1 - rendered.count("hype")) if hype_open else 0,
+    }
+    if max(slots.values()) <= 0:
         return
-    rows = conn.execute(
-        f"SELECT * FROM clips WHERE status IN {IN_PROGRESS} ORDER BY view_count DESC LIMIT 50"
-    ).fetchall()
+    rows = by_priority(conn.execute(f"SELECT * FROM clips WHERE status IN {IN_PROGRESS}").fetchall(), hype_open)
     for row in rows:
-        if slots <= 0:
-            break
+        kind = "hype" if row["source"] == "hype" else "regular"
+        if slots[kind] <= 0:
+            continue
         if streamer_capped(conn, cfg, row["broadcaster_id"]):
             continue
         cid, stem = row["clip_id"], _safe_stem(row["clip_id"])
@@ -150,8 +158,9 @@ def process(conn, cfg):
                              start=row["trim_start"] or 0.0, end=row["trim_end"], hook=row["hook"])
                 clip_db.update(conn, cid, status="rendered", render_path=str(out))
                 _remove(row["source_path"])
-                log.info(f"Rendered  {row['broadcaster_name']} ({row['view_count']}v): {row['title']!r} -> {out.name}")
-                slots -= 1
+                label = f"hype x{row['hype_score']}" if kind == "hype" else f"{row['view_count']}v"
+                log.info(f"Rendered  {row['broadcaster_name']} ({label}): {row['title']!r} -> {out.name}")
+                slots[kind] -= 1
         except Exception as e:
             log.warning(f"Failed    {cid} at {row['status']}: {e.__class__.__name__}: {e}")
             clip_db.fail(conn, cid, f"{e.__class__.__name__}: {e}")
@@ -182,7 +191,8 @@ def try_upload(conn, cfg) -> bool:
     if last and now - last < timedelta(minutes=upload_spacing_minutes(cfg)):
         return True
 
-    for row in conn.execute("SELECT * FROM clips WHERE status = 'rendered' ORDER BY view_count DESC").fetchall():
+    rendered = conn.execute("SELECT * FROM clips WHERE status = 'rendered'").fetchall()
+    for row in by_priority(rendered, hype_open=hype_slots_left(conn, cfg) > 0):
         if streamer_capped(conn, cfg, row["broadcaster_id"]):
             continue
         if cfg.get("safety_check", True) and row["safety"] != "ok":
@@ -258,9 +268,13 @@ def main():
     cfg = load_config()
     load_model(cfg["whisper_model"])  # load once up front; stays on the GPU between cycles
     uploads_paused_until = None
+    hype_thread = None
+    run_hype = not args.once and not os.getenv("CLIP_DB")  # never from one-off or scratch-DB test runs
 
     while True:
         cfg = load_config()  # pick up config.json edits without restarting
+        if run_hype and (hype_thread is None or not hype_thread.is_alive()):
+            hype_thread = start_hype(cfg)  # also picks up a Twitch sign-in done after startup
         conn = clip_db.connect()
         try:
             if not args.skip_fetch:
@@ -284,7 +298,27 @@ def main():
 
         if args.once:
             break
-        time.sleep(cfg["poll_minutes"] * 60)
+        wait_for_next_cycle(cfg)
+
+
+def wait_for_next_cycle(cfg):
+    """Sleep until the next cycle, but wake early when the hype detector queues a fresh clip."""
+    started = time.time()
+    deadline = started + cfg["poll_minutes"] * 60
+    while time.time() < deadline:
+        time.sleep(30)
+        if time.time() - started < 120:  # never cycle more often than every 2 minutes
+            continue
+        conn = clip_db.connect()
+        try:
+            counts = dict(conn.execute(
+                "SELECT status, COUNT(*) FROM clips WHERE source = 'hype' AND status IN ('queued', 'rendered') GROUP BY status"
+            ).fetchall())
+            # Only worth waking if a fresh hype clip can actually be rendered now (its slot is free).
+            if counts.get("queued") and not counts.get("rendered") and hype_slots_left(conn, cfg) > 0:
+                return
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS clips (
     trim_end         REAL,
     hook             TEXT,          -- on-screen hook banner text
     tags             TEXT,          -- JSON list of clip-specific tags
+    hype_score       REAL,          -- source='hype': chat spike size (x normal level)
     error            TEXT,
     attempts         INTEGER DEFAULT 0,
     discovered_at    TEXT,
@@ -71,7 +72,7 @@ def connect() -> sqlite3.Connection:
     # Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them to an existing DB.
     existing = {r["name"] for r in conn.execute("PRAGMA table_info(clips)")}
     for col, kind in (("safety", "TEXT"), ("spoiler", "INTEGER"), ("trim_start", "REAL"), ("trim_end", "REAL"),
-                      ("hook", "TEXT"), ("tags", "TEXT")):
+                      ("hook", "TEXT"), ("tags", "TEXT"), ("hype_score", "REAL")):
         if col not in existing:
             conn.execute(f"ALTER TABLE clips ADD COLUMN {col} {kind}")
     conn.commit()
@@ -109,12 +110,15 @@ def find_overlapping(conn, broadcaster_id: str, created_at: str, window_sec: int
     ).fetchall()
 
 
-def uploads_since(conn, since: datetime, broadcaster_id: str | None = None) -> int:
+def uploads_since(conn, since: datetime, broadcaster_id: str | None = None, source: str | None = None) -> int:
     sql = "SELECT COUNT(*) FROM clips WHERE status = 'uploaded' AND uploaded_at >= ?"
     args = [since.strftime("%Y-%m-%dT%H:%M:%SZ")]
     if broadcaster_id:
         sql += " AND broadcaster_id = ?"
         args.append(broadcaster_id)
+    if source:
+        sql += " AND source = ?"
+        args.append(source)
     return conn.execute(sql, args).fetchone()[0]
 
 

@@ -4,6 +4,7 @@
 """
 
 import argparse
+import time
 from pathlib import Path
 
 import yt_dlp
@@ -26,9 +27,17 @@ def download(url: str, name: str) -> Path:
         "noprogress": True,
         "retries": 3,
     }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        path = Path(ydl.prepare_filename(info))
+    # A freshly created clip (hype detector) shows up in the API before its video file is ready -> 404 for a bit.
+    for attempt in range(5):
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                path = Path(ydl.prepare_filename(info))
+            break
+        except yt_dlp.utils.DownloadError as e:
+            if "404" not in str(e) or attempt == 4:
+                raise
+            time.sleep(15)
     if path != out:
         path.replace(out)
     return out

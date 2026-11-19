@@ -24,6 +24,24 @@
   "upload_burst": {"until": "2026-11-19T00:30:00", "min_minutes_between_uploads": 15},
   "youtube_privacy": "private",
 
+  "hype": {
+    "enabled": true,
+    "top_streams": 15,
+    "min_viewers": 1000,
+    "refresh_minutes": 10,
+    "warmup_seconds": 240,
+    "spike_ratio": 3.0,
+    "min_weighted_msgs": 40,
+    "baseline_floor": 8,
+    "channel_cooldown_minutes": 5,
+    "max_clips_per_hour": 6,
+    "clip_seconds": 30,
+    "clip_delay_seconds": 4,
+    "max_uploads_per_day": 2,
+    "max_pending": 2,
+    "max_age_hours": 6
+  },
+
   "poll_minutes": 15,
   "render_batch_size": 2,
   "whisper_model": "large-v3-turbo"

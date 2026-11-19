@@ -28,6 +28,8 @@ clean word-by-word captions and streamer credit, and upload to the clipping chan
 | 4 | `tools/render_short.py` | 1080×1920: blurred background, full clip, `@streamer` credit, animated captions; NVENC encode; loudness normalized |
 | 5 | `tools/generate_title.py` | Claude Haiku 5.5 writes a short, punchy title from 3 frames + transcript (~$0.0005). No `ANTHROPIC_API_KEY` or API error → rule-based title |
 | 6 | `tools/upload_youtube.py` | Builds description/tags (with credit + links) and uploads |
+| 1b | `tools/hype_detector.py` | Background thread: reads chat (anonymous IRC) on the top live English GTA 6 streams, detects spikes vs. each channel's normal level (hype emotes weigh extra, "clip it" triple), creates a 30s Twitch clip via the API and queues it as `source='hype'`. Needs `tools/twitch_user_auth.py` once. `--dry-run` logs spikes without clipping |
+| — | `tools/twitch_user_auth.py` | Twitch device-code sign-in (scope `clips:edit`) → `token_twitch.json` (gitignored), auto-refreshed |
 | — | `tools/run_pipeline.py` | The agent: runs 1→5 every `poll_minutes`, enforces pacing, cleans up files |
 | — | `tools/clip_db.py` | Inspect state: `python tools/clip_db.py` (counts), `... list rendered` |
 
@@ -57,6 +59,16 @@ To restart onto new code: close the "GTA 6 Clip Agent" window and run `start_cli
 | `safety_check` | true | Frame-level content check before render (and before upload for anything rendered unchecked) |
 | `auto_edit` / `edit_max_seconds` | true / 20 | Trim to the best window + hook banner. Raise the max to test longer Shorts |
 | `upload_burst` | {until, min_minutes_between_uploads} | Temporary faster spacing that switches itself off at `until` (PC local time) |
+| `hype.*` | see config.json | `top_streams` 15, `min_viewers` 1000, `warmup_seconds` 240, `spike_ratio` 3.0 (× normal 10s chat level), `min_weighted_msgs` 40, `baseline_floor` 8, `channel_cooldown_minutes` 5, `max_clips_per_hour` 6, `clip_seconds` 30, `clip_delay_seconds` 4, `max_uploads_per_day` 2 (hype share of the daily uploads), `max_pending` 2 (unused hype clips at once; a spike ≥1.25× the weakest replaces it), `max_age_hours` 6 (stale after) |
+
+Hype clips are only **created** inside the upload window and while hype upload slots remain — no point posting
+public clips we'll never use.
+
+**Hype clip priority:** while hype upload slots remain today, fresh hype clips (strongest spike first) go ahead
+of viewer clips, with their own render slot (one rendered hype clip waiting at a time) so a full backlog never
+delays them; the agent also wakes between cycles when one is queued. Out of hype slots → hype clips are ignored
+until tomorrow and expire after `max_age_hours`. Hype clips appear publicly on the streamer's Twitch channel
+under the signed-in account's name.
 | `max_uploads_per_day` | 5 | Counted from each day's `upload_window` start (local midnight if no window). First-two-weeks plan (from 2026-11-19): 5/day, then raise if views per Short hold |
 | `max_uploads_per_streamer_per_day` | 2 | Keeps the feed varied |
 | `min_minutes_between_uploads` | 150 | Spacing; ≈ window length / max_uploads_per_day |
@@ -95,8 +107,7 @@ Edits to `config.json` take effect next cycle — no restart needed.
 
 ## Roadmap (not built yet)
 0. ~~Hook text + auto-trim to ≤20s + clip-specific tags~~ — done 2026-11-18 (`plan_edit.py`).
-1. **Live chat-spike detector** — watch chat of live GTA 6 streamers, detect hype spikes (message rate + KEKW/LUL/W),
-   call Twitch **Create Clip** (`clips:edit` user token, `duration` 5–60s) to grab moments nobody clipped.
+1. ~~Live chat-spike detector~~ — done 2026-11-19 (`hype_detector.py`). Tune thresholds from real results.
 2. **Per-streamer facecam layouts** (split screen: facecam top, gameplay bottom).
 3. ~~Better titles~~ — done 2026-11-18 (`generate_title.py`, Claude Haiku 5.5).
 4. **Custom Shorts thumbnails** (`thumbnails.set` supports Shorts since Nov 3, 2026).
@@ -141,5 +152,12 @@ Edits to `config.json` take effect next cycle — no restart needed.
   quotes and cuts a tacked-on second clause past 70 chars. Don't rely on the prompt alone for hard limits.
 - 2026-11-18: The upload-time safety check caught a strip-club clip ("LMAO", Dinah) rendered before the check
   existed — keep that backstop.
+- 2026-11-19: Hype detector: anonymous IRC (`justinfan#####`) still works. Bug found in dry run: the baseline
+  counted the empty pre-join minutes → every channel "spiked" at warm-up end. Fixed (baseline only uses windows
+  since joining). At 2.5× it fired ~2/min across 15 chats (top ratios ~3.2) → raised to 3.0× + 40 weighted msgs.
+- 2026-11-19: Create Clip returned 403 on caseoh_ (clipping restricted to followers/subs). Following big GTA
+  streamers with the clipping account (vinsmokedav) opens up followers-only channels; sub-only stays closed.
+- 2026-11-19: A just-created clip appears in Get Clips before its video is downloadable (404 for ~10-30s).
+  `download_clip.py` now retries 404s (5 × 15s).
 - 2026-11-18: Haiku copied the prompt's example hook pattern ("WAIT FOR THE …") — varied examples + passing the
   last 10 hooks fixed it. Watch for other repeated patterns in titles.
