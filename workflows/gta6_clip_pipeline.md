@@ -42,6 +42,13 @@ minimized at logon. The .bat restarts the agent 60s after a crash. Only one agen
 localhost port 47823); a second copy prints "already running" and exits with code 3, which closes its window.
 To restart onto new code: close the "GTA 6 Clip Agent" window and run `start_clipper.bat` again.
 
+**Runs without VS Code** as long as it was started by Windows (logon shortcut, or double-clicking the .bat/shortcut).
+A copy started from a VS Code / Claude Code terminal lives in that session's job object and may die when VS Code
+closes. Relaunch it detached with `explorer.exe "<Startup folder>\GTA 6 Clip Agent.lnk"` (2026-11-19 learning).
+**Sleep:** during the upload window (or a burst) the agent blocks Windows *idle* sleep (SetThreadExecutionState);
+the screen can still turn off and manual sleep / lid close still works. Outside the window normal sleep applies, so
+the PC must be awake (or woken) by 11:00 for uploads to start on time.
+
 ## Outputs
 - **Deliverable:** Shorts on the YouTube channel. The uploaded clip's YouTube ID is in `data/clips.db`; log in `data/pipeline.log`.
 - **Deliverable:** the Google Sheet tracker (its ID is saved in `data/tracker.json`; deleted from Drive → a new one is made).

@@ -249,6 +249,17 @@ def try_upload(conn, cfg) -> bool:
     return True
 
 
+ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+
+
+def keep_awake(on: bool):
+    """Block Windows idle sleep while uploads are due (the PC sleeps after 5h idle on AC). The screen can still
+    turn off and manual sleep still works; outside the upload window normal sleep is allowed again."""
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if on else 0))
+
+
 ALREADY_RUNNING_EXIT = 3  # start_clipper.bat checks for this so a duplicate window just closes
 
 
@@ -285,6 +296,8 @@ def main():
 
     while True:
         cfg = load_config()  # pick up config.json edits without restarting
+        if not args.once:
+            keep_awake(burst_active(cfg) or in_upload_window(cfg))
         if run_hype and (hype_thread is None or not hype_thread.is_alive()):
             hype_thread = start_hype(cfg)  # also picks up a Twitch sign-in done after startup
         conn = clip_db.connect()
