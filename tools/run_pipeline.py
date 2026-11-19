@@ -24,6 +24,7 @@ from _common import DATA_DIR, load_config
 from download_clip import download
 from fetch_twitch_clips import fetch
 from google_auth import YOUTUBE_TOKEN_FILE
+from plan_edit import plan_edit
 from render_short import render
 from safety_check import check_clip
 from transcribe_clip import load_model, transcribe
@@ -61,9 +62,37 @@ def expire_stale(conn, cfg):
         log.info(f"Skipped {n} clips older than {cfg['max_clip_age_hours']}h")
 
 
+def _window_times(cfg):
+    win = cfg.get("upload_window")
+    if not win:
+        return None
+    return datetime.strptime(win["start"], "%H:%M").time(), datetime.strptime(win["end"], "%H:%M").time()
+
+
+def in_upload_window(cfg) -> bool:
+    """upload_window {"start": "11:00", "end": "23:00"} in PC local time; supports windows that cross midnight."""
+    times = _window_times(cfg)
+    if not times:
+        return True
+    start, end = times
+    now = datetime.now().time()
+    return start <= now < end if start <= end else (now >= start or now < end)
+
+
+def cap_period_start(cfg) -> datetime:
+    """Daily caps count uploads since the latest window opening (or local midnight without a window).
+    A rolling 24h count would let late-night uploads eat into the next day's quota."""
+    times = _window_times(cfg)
+    local_now = datetime.now().astimezone()
+    start = local_now.replace(hour=times[0].hour if times else 0, minute=times[0].minute if times else 0,
+                              second=0, microsecond=0)
+    if start > local_now:
+        start -= timedelta(days=1)
+    return start.astimezone(timezone.utc)
+
+
 def streamer_capped(conn, cfg, broadcaster_id: str) -> bool:
-    day_ago = datetime.now(timezone.utc) - timedelta(days=1)
-    return clip_db.uploads_since(conn, day_ago, broadcaster_id) >= cfg["max_uploads_per_streamer_per_day"]
+    return clip_db.uploads_since(conn, cap_period_start(cfg), broadcaster_id) >= cfg["max_uploads_per_streamer_per_day"]
 
 
 def process(conn, cfg):
@@ -105,8 +134,20 @@ def process(conn, cfg):
                     continue
                 clip_db.update(conn, cid, safety="ok", spoiler=int(spoiler))
                 row = clip_db.get(conn, cid)
+            if row["status"] == "transcribed" and cfg.get("auto_edit", True) and row["trim_end"] is None:
+                words = json.loads(Path(row["transcript_path"]).read_text(encoding="utf-8"))["words"]
+                recent = [r[0] for r in conn.execute(
+                    "SELECT hook FROM clips WHERE hook IS NOT NULL ORDER BY updated_at DESC LIMIT 10")]
+                plan = plan_edit(Path(row["source_path"]), words, row["broadcaster_name"], row["title"],
+                                 cfg.get("edit_max_seconds", 20), recent_hooks=recent)
+                clip_db.update(conn, cid, trim_start=plan.start, trim_end=plan.end, hook=plan.hook,
+                               tags=json.dumps(plan.tags), yt_title=plan.title)
+                log.info(f"Edit plan [{plan.note}, ${plan.cost:.4f}] {plan.start:.1f}-{plan.end:.1f}s "
+                         f"hook={plan.hook!r} title={plan.title!r}")
+                row = clip_db.get(conn, cid)
             if row["status"] == "transcribed":
-                out = render(Path(row["source_path"]), Path(row["transcript_path"]), row["broadcaster_name"])
+                out = render(Path(row["source_path"]), Path(row["transcript_path"]), row["broadcaster_name"],
+                             start=row["trim_start"] or 0.0, end=row["trim_end"], hook=row["hook"])
                 clip_db.update(conn, cid, status="rendered", render_path=str(out))
                 _remove(row["source_path"])
                 log.info(f"Rendered  {row['broadcaster_name']} ({row['view_count']}v): {row['title']!r} -> {out.name}")
@@ -116,13 +157,29 @@ def process(conn, cfg):
             clip_db.fail(conn, cid, f"{e.__class__.__name__}: {e}")
 
 
+def burst_active(cfg) -> bool:
+    """A temporary "upload_burst" in config.json (it expires on its own at "until", PC local time)."""
+    burst = cfg.get("upload_burst") or {}
+    if not burst.get("until"):
+        return False
+    until = datetime.fromisoformat(burst["until"])
+    return (datetime.now(until.tzinfo) if until.tzinfo else datetime.now()) < until
+
+
+def upload_spacing_minutes(cfg) -> int:
+    return cfg["upload_burst"]["min_minutes_between_uploads"] if burst_active(cfg) else cfg["min_minutes_between_uploads"]
+
+
 def try_upload(conn, cfg) -> bool:
-    """Upload at most one clip per cycle, respecting daily caps and spacing. Returns False if quota is exhausted."""
+    """Upload at most one clip per cycle, respecting the upload window, daily caps and spacing.
+    Returns False if YouTube's quota is exhausted."""
     now = datetime.now(timezone.utc)
-    if clip_db.uploads_since(conn, now - timedelta(days=1)) >= cfg["max_uploads_per_day"]:
+    if not burst_active(cfg) and not in_upload_window(cfg):
+        return True
+    if clip_db.uploads_since(conn, cap_period_start(cfg)) >= cfg["max_uploads_per_day"]:
         return True
     last = clip_db.last_upload_time(conn)
-    if last and now - last < timedelta(minutes=cfg["min_minutes_between_uploads"]):
+    if last and now - last < timedelta(minutes=upload_spacing_minutes(cfg)):
         return True
 
     for row in conn.execute("SELECT * FROM clips WHERE status = 'rendered' ORDER BY view_count DESC").fetchall():
@@ -143,7 +200,8 @@ def try_upload(conn, cfg) -> bool:
             clip_db.update(conn, row["clip_id"], safety="ok", spoiler=int(spoiler))
             row = clip_db.get(conn, row["clip_id"])
         meta = build_metadata(row["broadcaster_name"], row["title"], row["url"], row["transcript_path"],
-                              video_path=Path(row["render_path"]), title=row["yt_title"], spoiler=bool(row["spoiler"]))
+                              video_path=Path(row["render_path"]), title=row["yt_title"], spoiler=bool(row["spoiler"]),
+                              clip_tags=json.loads(row["tags"]) if row["tags"] else None)
         if meta["title_source"] == "haiku":
             clip_db.update(conn, row["clip_id"], yt_title=meta["title"])  # a retry reuses it instead of paying again
         if meta["title_source"] != "saved":

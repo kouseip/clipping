@@ -12,12 +12,15 @@ def duration(video: Path) -> float:
     ).stdout.strip())
 
 
+def frame_times(dur: float, count: int, start: float = 0.0, end: float = 1.0) -> list[float]:
+    """Seconds at which sample_frames grabs its frames (centre of each of count equal slices)."""
+    return [dur * (start + (end - start) * (i + 0.5) / count) for i in range(count)]
+
+
 def sample_frames(video: Path, count: int, width: int, start: float = 0.0, end: float = 1.0) -> list[str]:
     """count base64 JPEGs spread between start and end (fractions of the duration), scaled to width px."""
-    dur = duration(video)
     out = []
-    for i in range(count):
-        t = dur * (start + (end - start) * (i + 0.5) / count)
+    for t in frame_times(duration(video), count, start, end):
         jpg = subprocess.run(
             ["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1",
              "-vf", f"scale={width}:-2", "-f", "image2pipe", "-vcodec", "mjpeg", "-"],

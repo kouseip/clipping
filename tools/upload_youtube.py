@@ -19,6 +19,7 @@ from generate_title import generate_title
 from google_auth import YOUTUBE_SCOPES, YOUTUBE_TOKEN_FILE, NeedsSignIn, get_service
 
 GAMING_CATEGORY = "20"
+BROAD_TAGS = ["gaming", "funny moments", "twitch clips", "shorts"]
 # Clip titles that say nothing; fall back to a hook from the transcript instead.
 GENERIC_TITLES = {"gta", "gta 6", "gta6", "gtavi", "gta vi", "grand theft auto vi", "clip", "lol", "lul", "omg", "w", "l"}
 
@@ -57,7 +58,8 @@ def _rule_based_title(streamer: str, clip_title: str, words: list[str]) -> str:
 
 
 def build_metadata(streamer: str, clip_title: str, clip_url: str, transcript_path: str | None,
-                   video_path: Path | None = None, title: str | None = None, spoiler: bool = False) -> dict:
+                   video_path: Path | None = None, title: str | None = None, spoiler: bool = False,
+                   clip_tags: list[str] | None = None) -> dict:
     """With video_path, Claude Haiku writes the title from frames + transcript; otherwise (or on failure) rule-based.
     Pass title to reuse one generated earlier (e.g. a retry after a failed upload) without paying again.
     spoiler=True prefixes the title with "SPOILER:" (main-story moments, flagged by safety_check)."""
@@ -88,7 +90,9 @@ def build_metadata(streamer: str, clip_title: str, clip_url: str, transcript_pat
         "",
         f"#GTA6 #GTAVI #{tag} #Shorts",
     ])
-    tags = ["GTA 6", "GTA VI", "Grand Theft Auto VI", "GTA 6 gameplay", streamer, f"{streamer} GTA 6", "Twitch clips"]
+    # Clip-specific (from plan_edit) -> niche -> broad, ~3-4 of each.
+    niche = ["GTA 6", "GTA VI", streamer, f"{streamer} GTA 6"]
+    tags = list(dict.fromkeys([*(clip_tags or [])[:4], *niche, *BROAD_TAGS]))
     return {"title": title, "description": description, "tags": tags, "title_source": title_source, "title_cost": cost}
 
 

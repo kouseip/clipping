@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS clips (
     yt_title         TEXT,
     safety           TEXT,          -- 'ok' once the content check passed (rejects go to status 'skipped')
     spoiler          INTEGER,       -- 1 = main-story moment; title gets a "SPOILER:" prefix
+    trim_start       REAL,          -- edit plan: window kept from the source clip (seconds)
+    trim_end         REAL,
+    hook             TEXT,          -- on-screen hook banner text
+    tags             TEXT,          -- JSON list of clip-specific tags
     error            TEXT,
     attempts         INTEGER DEFAULT 0,
     discovered_at    TEXT,
@@ -66,7 +70,8 @@ def connect() -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     # Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them to an existing DB.
     existing = {r["name"] for r in conn.execute("PRAGMA table_info(clips)")}
-    for col, kind in (("safety", "TEXT"), ("spoiler", "INTEGER")):
+    for col, kind in (("safety", "TEXT"), ("spoiler", "INTEGER"), ("trim_start", "REAL"), ("trim_end", "REAL"),
+                      ("hook", "TEXT"), ("tags", "TEXT")):
         if col not in existing:
             conn.execute(f"ALTER TABLE clips ADD COLUMN {col} {kind}")
     conn.commit()

@@ -4,7 +4,7 @@
 
   "lookback_hours": 12,
   "max_pages": 3,
-  "min_views": 50,
+  "min_views": 500,
   "min_duration_sec": 8,
   "max_clip_age_hours": 48,
   "duplicate_window_sec": 60,
@@ -14,13 +14,17 @@
   "title_blocklist": ["naked", "nude", "nudity", "shower", "strip", "boob", "tits", "titty", "goon", "nsfw", "sex", "porn", "thong", "bikini", "twerk", "horny", "banned", "gyat", "booty", "thirst", "jiggle", "lap dance", "18+", "leak", "spoiler", "ending"],
 
   "safety_check": true,
+  "auto_edit": true,
+  "edit_max_seconds": 20,
 
-  "max_uploads_per_day": 15,
-  "max_uploads_per_streamer_per_day": 3,
-  "min_minutes_between_uploads": 90,
+  "max_uploads_per_day": 5,
+  "max_uploads_per_streamer_per_day": 2,
+  "min_minutes_between_uploads": 150,
+  "upload_window": {"start": "11:00", "end": "23:00"},
+  "upload_burst": {"until": "2026-11-19T00:30:00", "min_minutes_between_uploads": 15},
   "youtube_privacy": "private",
 
   "poll_minutes": 15,
-  "render_batch_size": 3,
+  "render_batch_size": 2,
   "whisper_model": "large-v3-turbo"
 }

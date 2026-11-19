@@ -28,6 +28,7 @@ PAUSE_BREAK_SEC = 0.6  # a pause this long starts a new caption page
 MAX_SHORT_SEC = 59.0
 HIGHLIGHT = "&H0000E5FF"  # ASS colours are &HAABBGGRR -> yellow #FFE500
 WHITE = "&H00FFFFFF"
+BLACK = "&H00000000"
 
 
 def probe(video: Path) -> tuple[int, int, float]:
@@ -77,7 +78,18 @@ def ass_time(t: float) -> str:
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
-def build_ass(words: list[dict], streamer: str, duration: float, caption_y: int, credit_y: int) -> str:
+def _wrap_hook(hook: str, max_line: int = 18) -> str:
+    """Split a hook into at most two balanced lines (WrapStyle 2 means ASS won't wrap by itself)."""
+    hook = re.sub(r"[{}\\]", "", hook).upper()
+    if len(hook) <= max_line:
+        return hook
+    words = hook.split()
+    best = min(range(1, len(words)), key=lambda i: abs(len(" ".join(words[:i])) - len(" ".join(words[i:]))), default=0)
+    return " ".join(words[:best]) + "\\N" + " ".join(words[best:]) if best else hook
+
+
+def build_ass(words: list[dict], streamer: str, duration: float, caption_y: int, credit_y: int,
+              hook: str | None = None, hook_y: int = 0) -> str:
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {W}
@@ -89,11 +101,16 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,{FONT},92,{WHITE},{WHITE},&H00000000,&H99000000,0,0,0,0,100,100,1,0,1,7,4,5,40,40,0,1
 Style: Credit,{FONT},50,{WHITE},{WHITE},&H00000000,&H99000000,0,0,0,0,100,100,1,0,1,5,2,5,40,40,0,1
+Style: Hook,{FONT},68,{BLACK},{BLACK},{HIGHLIGHT},&H00000000,0,0,0,0,100,100,1,0,3,16,0,5,40,40,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = [f"Dialogue: 0,{ass_time(0)},{ass_time(duration)},Credit,,0,0,0,,{{\\pos({W // 2},{credit_y})}}@{streamer}"]
+    if hook:
+        # Yellow banner above the clip from the very first frame, with a quick pop-in.
+        pop = "\\fscx70\\fscy70\\t(0,120,\\fscx100\\fscy100)"
+        lines.append(f"Dialogue: 2,{ass_time(0)},{ass_time(duration)},Hook,,0,0,0,,{{\\pos({W // 2},{hook_y}){pop}}}{_wrap_hook(hook)}")
     pages = build_pages(words)
     for p_idx, page in enumerate(pages):
         next_start = pages[p_idx + 1][0]["start"] if p_idx + 1 < len(pages) else duration
@@ -115,21 +132,30 @@ def _encode(cmd_base: list[str], encoder_args: list[str], out: Path) -> subproce
     return subprocess.run(cmd_base + encoder_args + [str(out)], cwd=ROOT, capture_output=True, text=True)
 
 
-def render(video: Path, transcript: Path, streamer: str, out: Path | None = None) -> Path:
+def render(video: Path, transcript: Path, streamer: str, out: Path | None = None,
+           start: float = 0.0, end: float | None = None, hook: str | None = None) -> Path:
+    """start/end trim the clip (seconds in the source); hook is drawn as a banner from the first frame."""
     RENDERS_DIR.mkdir(parents=True, exist_ok=True)
     video = video.resolve()  # ffmpeg runs with cwd=ROOT, so caller-relative paths would break
     out = (out or RENDERS_DIR / f"{video.stem}_short.mp4").resolve()
-    src_w, src_h, duration = probe(video)
-    duration = min(duration, MAX_SHORT_SEC)
+    src_w, src_h, src_duration = probe(video)
+    end = min(end or src_duration, src_duration)
+    duration = min(end - start, MAX_SHORT_SEC)
 
     fg_h = round(W * src_h / src_w / 2) * 2
     fg_y = (H - fg_h) // 2 - 160
     caption_y = fg_y + fg_h + 180
     credit_y = fg_y - 70
+    hook_y = credit_y - 170
 
-    words = json.loads(transcript.read_text(encoding="utf-8"))["words"]
+    # Shift word timings onto the trimmed timeline and drop words outside the window.
+    words = [
+        {**w, "start": max(0.0, w["start"] - start), "end": w["end"] - start}
+        for w in json.loads(transcript.read_text(encoding="utf-8"))["words"]
+        if w["end"] > start + 0.05 and w["start"] < start + duration
+    ]
     ass_path = RENDERS_DIR / f"{video.stem}.ass"
-    ass_path.write_text(build_ass(words, streamer, duration, caption_y, credit_y), encoding="utf-8")
+    ass_path.write_text(build_ass(words, streamer, duration, caption_y, credit_y, hook, hook_y), encoding="utf-8")
 
     # Relative, forward-slash paths keep ffmpeg's filter parser away from Windows "C:" escaping.
     ass_rel = ass_path.relative_to(ROOT).as_posix()
@@ -141,8 +167,9 @@ def render(video: Path, transcript: Path, streamer: str, out: Path | None = None
         f"[bg][fg]overlay=0:{fg_y},subtitles=filename='{ass_rel}':fontsdir='{fonts_rel}',format=yuv420p[v]"
     )
     base = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(video),
-        "-filter_complex", vf, "-map", "[v]", "-map", "0:a?", "-t", str(MAX_SHORT_SEC),
+        # -ss before -i seeks the input, so the trimmed clip (and the subtitles) start at t=0.
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-i", str(video),
+        "-filter_complex", vf, "-map", "[v]", "-map", "0:a?", "-t", f"{duration:.3f}",
         "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",  # consistent loudness across streamers
         "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart",
     ]
@@ -162,5 +189,8 @@ if __name__ == "__main__":
     ap.add_argument("transcript", type=Path)
     ap.add_argument("--streamer", required=True)
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--start", type=float, default=0.0)
+    ap.add_argument("--end", type=float, default=None)
+    ap.add_argument("--hook", default=None)
     args = ap.parse_args()
-    print(render(args.video, args.transcript, args.streamer, args.out))
+    print(render(args.video, args.transcript, args.streamer, args.out, args.start, args.end, args.hook))

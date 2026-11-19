@@ -24,6 +24,7 @@ clean word-by-word captions and streamer credit, and upload to the clipping chan
 | 2 | `tools/download_clip.py` | yt-dlp download to `.tmp/clips/` |
 | 3 | `tools/transcribe_clip.py` | faster-whisper `large-v3-turbo` on the RTX 4060 → word timestamps in `.tmp/transcripts/` |
 | 3b | `tools/safety_check.py` | Claude Haiku 5.5 reviews a frame every ~2s (max 30) + transcript against YouTube's rules (would it be removed or age-restricted?). Reject → `skipped`; can't run → clips held, never rendered unchecked. Same call flags main-story spoilers → title gets a `SPOILER:` prefix (~$0.0005–0.0017/clip) |
+| 3c | `tools/plan_edit.py` | Claude Haiku 5.5 sees ~15 timestamped frames + timed transcript → best 10–20s window (ends on the payoff, never cuts a word), a 3–6 word on-screen hook (varied vs. the last 10 hooks), the title, and 3–4 clip-specific tags (~$0.0003). Fails → last 20s, no hook |
 | 4 | `tools/render_short.py` | 1080×1920: blurred background, full clip, `@streamer` credit, animated captions; NVENC encode; loudness normalized |
 | 5 | `tools/generate_title.py` | Claude Haiku 5.5 writes a short, punchy title from 3 frames + transcript (~$0.0005). No `ANTHROPIC_API_KEY` or API error → rule-based title |
 | 6 | `tools/upload_youtube.py` | Builds description/tags (with credit + links) and uploads |
@@ -54,11 +55,14 @@ To restart onto new code: close the "GTA 6 Clip Agent" window and run `start_cli
 | `watchlist` / `blocklist` | [] / [] | Twitch logins. Watchlist set → only those streamers |
 | `title_blocklist` | naked, shower, horny, … | Clip titles containing any of these (substring, case-insensitive) are never queued |
 | `safety_check` | true | Frame-level content check before render (and before upload for anything rendered unchecked) |
-| `max_uploads_per_day` | 15 | Rolling 24h cap. Ramp up as the channel gains history/verification (see Learnings) |
-| `max_uploads_per_streamer_per_day` | 3 | Keeps the feed varied |
-| `min_minutes_between_uploads` | 90 | Spacing; set ≈ 1440 / max_uploads_per_day to spread uploads across the whole day |
+| `auto_edit` / `edit_max_seconds` | true / 20 | Trim to the best window + hook banner. Raise the max to test longer Shorts |
+| `upload_burst` | {until, min_minutes_between_uploads} | Temporary faster spacing that switches itself off at `until` (PC local time) |
+| `max_uploads_per_day` | 5 | Counted from each day's `upload_window` start (local midnight if no window). First-two-weeks plan (from 2026-11-19): 5/day, then raise if views per Short hold |
+| `max_uploads_per_streamer_per_day` | 2 | Keeps the feed varied |
+| `min_minutes_between_uploads` | 150 | Spacing; ≈ window length / max_uploads_per_day |
+| `upload_window` | 11:00–23:00 | Uploads only happen inside this window (PC local time, Central). Remove the key to upload around the clock |
 | `youtube_privacy` | private | Start `private` to review in YouTube Studio; switch to `public` once output is trusted |
-| `poll_minutes` / `render_batch_size` | 15 / 3 | Cycle interval; how many rendered clips to keep ready |
+| `poll_minutes` / `render_batch_size` | 15 / 2 | Cycle interval; how many rendered clips to keep ready (small = fresher clips at 5/day) |
 | `whisper_model` | large-v3-turbo | Use `distil-large-v3` or `small` if VRAM is tight |
 
 Edits to `config.json` take effect next cycle — no restart needed.
@@ -90,6 +94,7 @@ Edits to `config.json` take effect next cycle — no restart needed.
   (~$1.13 per 1k, Nov 2026) and grant the right to post their clips.
 
 ## Roadmap (not built yet)
+0. ~~Hook text + auto-trim to ≤20s + clip-specific tags~~ — done 2026-11-18 (`plan_edit.py`).
 1. **Live chat-spike detector** — watch chat of live GTA 6 streamers, detect hype spikes (message rate + KEKW/LUL/W),
    call Twitch **Create Clip** (`clips:edit` user token, `duration` 5–60s) to grab moments nobody clipped.
 2. **Per-streamer facecam layouts** (split screen: facecam top, gameplay bottom).
@@ -125,3 +130,16 @@ Edits to `config.json` take effect next cycle — no restart needed.
   catches the rest — it correctly rejected "neuron activation" (exposed nudity) and passed normal gameplay clips.
 - 2026-11-18: Haiku 5.5 titles cost ~$0.00016 each in practice (3 frames at 360px + transcript, effort low).
 - 2026-11-18: SQLite schema changes need a migration: `clip_db.connect()` adds missing columns via ALTER TABLE.
+- 2026-11-18: Shorts growth advice adopted from a creator video (unverified, test with the scoreboard): aim for
+  ≥70% "viewed vs. swiped away" (YouTube Studio metric) via ≤20s Shorts + a hook in the first 2s; tags = 3-4
+  clip-specific + niche + broad; no hashtags in titles, ~3 in the description; new channels get pushed slowly;
+  posting 1/day may beat many/day for new channels (volume decision pending, 2026-11-18).
+- 2026-11-18: Queue clips averaged 33s (only 17% ≤20s) before auto-trim.
+- 2026-11-18: Daily caps used a rolling 24h window, so late-night uploads would eat the next day's quota. Now
+  counted from the upload window's start.
+- 2026-11-18: Haiku titles occasionally break the rules (quotes, 83 chars). `generate_title._clean` now strips
+  quotes and cuts a tacked-on second clause past 70 chars. Don't rely on the prompt alone for hard limits.
+- 2026-11-18: The upload-time safety check caught a strip-club clip ("LMAO", Dinah) rendered before the check
+  existed — keep that backstop.
+- 2026-11-18: Haiku copied the prompt's example hook pattern ("WAIT FOR THE …") — varied examples + passing the
+  last 10 hooks fixed it. Watch for other repeated patterns in titles.
