@@ -308,7 +308,8 @@ def main():
             if run_tracker and tcfg.get("enabled") and time.time() - last_track >= tcfg.get("refresh_minutes", 60) * 60:
                 last_track = time.time()
                 for note in track_shorts(conn, cfg):
-                    (log.warning if "DELETE" in note or "sign" in note else log.info)(note)
+                    # Everything else the tracker reports is a flop to delete or a problem to fix.
+                    (log.info if "repost queued" in note else log.warning)(note)
                 log.info(f"Tracker: {tracker_summary(conn)}")
         except Exception as e:  # never let one bad cycle kill the agent
             log.exception(f"Cycle error: {e}")
