@@ -280,13 +280,29 @@ def run(conn, cfg, sheet: bool = True) -> list[str]:
         notes += refresh(conn, cfg, youtube)
     except (RefreshError, NeedsSignIn):
         notes.append("Tracker: YouTube sign-in expired, stats not refreshed: run `python tools/google_auth.py renew`")
+    except HttpError as e:
+        notes.append(f"Tracker: YouTube stats not refreshed: {_api_error(e)}")
     if sheet:
         try:
             write_sheet(conn)
         except (RefreshError, NeedsSignIn):
             notes.append("Tracker: Google Sheets not signed in (or expired), sheet not updated: "
                          "run `python tools/google_auth.py`")
+        except HttpError as e:
+            notes.append(f"Tracker: sheet not updated: {_api_error(e)}")
     return notes
+
+
+def _api_error(e: HttpError) -> str:
+    """One readable line instead of a traceback (e.g. the Sheets API not being enabled in the Cloud project)."""
+    try:
+        err = json.loads(e.content)["error"]
+        if any(d.get("reason") == "SERVICE_DISABLED" for d in err.get("details", [])):
+            return (f"the API is turned off in the Google Cloud project; enable it at "
+                    f"{next(d['metadata']['activationUrl'] for d in err['details'] if d.get('reason') == 'SERVICE_DISABLED')}")
+        return f"HTTP {e.resp.status}: {err.get('message', '')[:200]}"
+    except Exception:
+        return f"HTTP {e.resp.status}"
 
 
 def summary(conn) -> str:
