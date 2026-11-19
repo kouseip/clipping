@@ -2,7 +2,9 @@
 
 Reads chat anonymously over Twitch IRC (free, no login). Per channel it compares the last 10 seconds of chat
 (messages with KEKW/LUL/LMAO/💀/"NO WAY"... count extra, "clip it" counts triple) against the channel's
-normal 10-second level over the last 5 minutes. A big enough spike creates a 30s Twitch clip through the API
+normal 10-second level over the last 5 minutes. A spike only counts if chat is reacting (min_reaction_share of
+messages laugh/gasp) and not answering the streamer (max_answer_share of "1"/"yes"/"!enter" style messages), so a
+question, poll or giveaway doesn't look like a moment. A big enough spike creates a 30s Twitch clip through the API
 (needs `python tools/twitch_user_auth.py` once) and queues it in data/clips.db with source='hype'; the
 normal pipeline then safety-checks, trims, hooks, renders and uploads it.
 
@@ -22,7 +24,7 @@ import ssl
 import statistics
 import threading
 import time
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from pathlib import Path
 
 import requests
@@ -39,9 +41,17 @@ PRIVMSG = re.compile(r"^:[^ ]+ PRIVMSG #(\w+) :(.*)$")
 HYPE_WORDS = re.compile(
     r"(KEKW|OMEGALUL|LUL|LMA+O+|ICANT|PogChamp|POGGERS|\bPog\b|NO WAY|WTF|HOLY|LETS GO+|\bW+\b|💀|😂|🤣|\?\?\?)", re.I)
 CLIP_CALL = re.compile(r"\bclip (it|that|this)\b", re.I)
+# A spike only counts if chat is *reacting* (laughing, shocked, "clip it")...
+REACTIONS = re.compile(
+    r"(\bKEK\w*|OMEGALUL|\bLULW?\b|\bLO+L+W?\b|LMA+O+|LMFAO|ICANT|HAHA+|\bXD+\b|\bPogU?\b|PogChamp|POGGERS|monka\w*|"
+    r"NO WAY|WTF|HOLY|\bOMG\b|\bNOO+\b|\bHUH+\b|\bO{4,}\b|💀|😂|🤣|😭|😳|\?\?\?|\bclip (it|that|this)\b)", re.I)
+# ...not answering the streamer: a question or poll ("1", "yes", "b"), a giveaway or a bot command ("!enter").
+ANSWER = re.compile(r"^\s*(!\S+.*|\d{1,4}|[a-d]|y|n|yes|no|yea|yeah|yep|nah|nope|left|right)\W*$", re.I)
 
 
 def message_weight(text: str) -> float:
+    if text.lstrip().startswith("!"):
+        return 0.0  # bot commands (giveaway entries, !discord) are never a reaction to the stream
     weight = 1.0
     if HYPE_WORDS.search(text):
         weight += 1.0
@@ -58,10 +68,22 @@ class ChannelStats:
     def __init__(self, now: float):
         self.started = now
         self.counts: dict[int, float] = defaultdict(float)
+        self.msgs: deque[tuple[float, str]] = deque()  # (time, text) for the current window, to see *what* chat says
         self.last_trigger = 0.0
+        self.quiet_until = 0.0  # after a spike that wasn't a reaction, don't re-check (and re-log) for a moment
 
-    def add(self, t: float, weight: float):
+    def add(self, t: float, weight: float, text: str = ""):
         self.counts[int(t)] += weight
+        self.msgs.append((t, text))
+
+    def mix(self, now: float) -> dict:
+        """Share of the current window's messages that react to the stream vs. answer the streamer."""
+        texts = [m for t, m in self.msgs if t > now - self.WINDOW]
+        n = len(texts) or 1
+        top = Counter(re.sub(r"\s+", " ", m.strip().lower())[:25] for m in texts).most_common(3)
+        return {"reactions": sum(bool(REACTIONS.search(m)) for m in texts) / n,
+                "answers": sum(bool(ANSWER.match(m)) for m in texts) / n,
+                "top": ", ".join(f'"{m}" x{c}' for m, c in top)}
 
     def _sum(self, start: int) -> float:
         return sum(self.counts.get(s, 0.0) for s in range(start, start + self.WINDOW))
@@ -81,6 +103,8 @@ class ChannelStats:
         cutoff = int(now) - self.HISTORY - 2 * self.WINDOW
         for s in [s for s in self.counts if s < cutoff]:
             del self.counts[s]
+        while self.msgs and self.msgs[0][0] < now - self.WINDOW:
+            self.msgs.popleft()
 
 
 class HypeDetector:
@@ -138,7 +162,7 @@ class HypeDetector:
             raise ConnectionError("Twitch asked us to reconnect")
         elif m := PRIVMSG.match(line):
             if st := self.stats.get(m.group(1)):
-                st.add(time.time(), message_weight(m.group(2)))
+                st.add(time.time(), message_weight(m.group(2)), m.group(2))
 
     # ---- spike detection ------------------------------------------------------------------------
     def check_spikes(self):
@@ -147,16 +171,24 @@ class HypeDetector:
             st.prune(now)
             if now - st.started < self.h["warmup_seconds"]:
                 continue
-            if now - st.last_trigger < self.h["channel_cooldown_minutes"] * 60:
+            if now - st.last_trigger < self.h["channel_cooldown_minutes"] * 60 or now < st.quiet_until:
                 continue
             recent = st.recent(now)
             base = max(st.baseline(now), self.h["baseline_floor"])
             if recent >= self.h["min_weighted_msgs"] and recent >= self.h["spike_ratio"] * base:
-                st.last_trigger = now
                 score = round(recent / base, 2)
                 name = self.channels.get(login, {}).get("name", login)
-                log.info(f"Hype spike  {name}: chat {recent:.0f} vs normal {base:.0f} per 10s (x{score})"
-                         + (" [dry run]" if self.dry_run else ""))
+                mix = st.mix(now)
+                line = (f"Hype spike  {name}: chat {recent:.0f} vs normal {base:.0f} per 10s (x{score}), "
+                        f"{mix['reactions']:.0%} reactions, {mix['answers']:.0%} answers/commands; top: {mix['top']}")
+                if (mix["reactions"] < self.h.get("min_reaction_share", 0.25)
+                        or mix["answers"] > self.h.get("max_answer_share", 0.4)):
+                    # Chat is busy but not laughing or shocked: the streamer asked a question, a giveaway, a raid...
+                    st.quiet_until = now + 30
+                    log.info(line + " -> ignored, not a reaction")
+                    continue
+                st.last_trigger = now
+                log.info(line + (" [dry run]" if self.dry_run else ""))
                 if not self.dry_run:
                     self.jobs.put((login, score, now))
 

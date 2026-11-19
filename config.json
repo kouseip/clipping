@@ -16,6 +16,7 @@
   "safety_check": true,
   "auto_edit": true,
   "edit_max_seconds": 20,
+  "min_moment_score": 5,
 
   "max_uploads_per_day": 5,
   "max_uploads_per_streamer_per_day": 2,
@@ -32,6 +33,8 @@
     "warmup_seconds": 240,
     "spike_ratio": 3.0,
     "min_weighted_msgs": 40,
+    "min_reaction_share": 0.25,
+    "max_answer_share": 0.4,
     "baseline_floor": 8,
     "channel_cooldown_minutes": 5,
     "max_clips_per_hour": 6,

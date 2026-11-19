@@ -25,7 +25,7 @@ clean word-by-word captions and streamer credit, and upload to the clipping chan
 | 2 | `tools/download_clip.py` | yt-dlp download to `.tmp/clips/` |
 | 3 | `tools/transcribe_clip.py` | faster-whisper `large-v3-turbo` on the RTX 4060 → word timestamps in `.tmp/transcripts/` |
 | 3b | `tools/safety_check.py` | Claude Haiku 5.5 reviews a frame every ~2s (max 30) + transcript against YouTube's rules (would it be removed or age-restricted?). Reject → `skipped`; can't run → clips held, never rendered unchecked. Same call flags main-story spoilers → title gets a `SPOILER:` prefix (~$0.0005–0.0017/clip) |
-| 3c | `tools/plan_edit.py` | Claude Haiku 5.5 sees ~15 timestamped frames + timed transcript → best 10–20s window (ends on the payoff, never cuts a word), a 3–6 word on-screen hook (varied vs. the last 10 hooks), the title, and 3–4 clip-specific tags (~$0.0003). Fails → last 20s, no hook |
+| 3c | `tools/plan_edit.py` | Claude Haiku 5.5 sees ~15 timestamped frames + timed transcript → first judges the clip (one-sentence "what visibly happens" + a 1–10 score for "does a stranger get it right away"; under `min_moment_score` → `skipped`, never rendered), then the best 10–20s window (ends on the payoff, never cuts a word), a 3–6 word on-screen hook (varied vs. the last 10 hooks), the title, and 3–4 clip-specific tags (~$0.0003). Fails → last 20s, no hook, not judged |
 | 4 | `tools/render_short.py` | 1080×1920: blurred background, full clip, `@streamer` credit, animated captions; NVENC encode; loudness normalized |
 | 5 | `tools/generate_title.py` | Claude Haiku 5.5 writes a short, punchy title from 3 frames + transcript (~$0.0005). No `ANTHROPIC_API_KEY` or API error → rule-based title |
 | 6 | `tools/upload_youtube.py` | Builds description/tags (with credit + links) and uploads |
@@ -68,11 +68,19 @@ the PC must be awake (or woken) by 11:00 for uploads to start on time.
 | `title_blocklist` | naked, shower, horny, … | Clip titles containing any of these (substring, case-insensitive) are never queued |
 | `safety_check` | true | Frame-level content check before render (and before upload for anything rendered unchecked) |
 | `auto_edit` / `edit_max_seconds` | true / 20 | Trim to the best window + hook banner. Raise the max to test longer Shorts |
+| `min_moment_score` | 6 | plan_edit's clarity score a clip needs (1–3 nothing happening / talking to chat / needs context, 4–5 mild or hard to follow, 6–7 clear moment, 8–10 great). Skips log as "Passed on …" with the reason; the score and sentence are saved in `clips.moment_score` / `clips.moment` |
 | `upload_burst` | {until, min_minutes_between_uploads} | Temporary faster spacing that switches itself off at `until` (PC local time) |
-| `hype.*` | see config.json | `top_streams` 15, `min_viewers` 1000, `warmup_seconds` 240, `spike_ratio` 3.0 (× normal 10s chat level), `min_weighted_msgs` 40, `baseline_floor` 8, `channel_cooldown_minutes` 5, `max_clips_per_hour` 6, `clip_seconds` 30, `clip_delay_seconds` 4, `max_uploads_per_day` 2 (hype share of the daily uploads), `max_pending` 2 (unused hype clips at once; a spike ≥1.25× the weakest replaces it), `max_age_hours` 6 (stale after) |
+| `hype.*` | see config.json | `top_streams` 15, `min_viewers` 1000, `warmup_seconds` 240, `spike_ratio` 3.0 (× normal 10s chat level), `min_weighted_msgs` 40, `min_reaction_share` 0.25, `max_answer_share` 0.4, `baseline_floor` 8, `channel_cooldown_minutes` 5, `max_clips_per_hour` 6, `clip_seconds` 30, `clip_delay_seconds` 4, `max_uploads_per_day` 2 (hype share of the daily uploads), `max_pending` 2 (unused hype clips at once; a spike ≥1.25× the weakest replaces it), `max_age_hours` 6 (stale after) |
 
 Hype clips are only **created** inside the upload window and while hype upload slots remain — no point posting
 public clips we'll never use.
+
+**A spike must be a reaction.** Chat also explodes when the streamer asks a question, runs a poll or a giveaway, or
+gets raided, with nothing happening in the game. So for every spike the detector looks at *what* chat typed in that
+10s window: it needs at least `hype.min_reaction_share` of messages laughing or shocked (KEKW, LMAO, 💀, NO WAY,
+"clip it"…) and at most `hype.max_answer_share` answering ("1", "yes", "b", "!enter"). Otherwise the log says
+"-> ignored, not a reaction" with the top 3 messages, so thresholds can be tuned from real chat. Bot commands
+("!…") never count toward a spike at all. Clips that pass still go through plan_edit's clarity score.
 
 **Hype clip priority:** while hype upload slots remain today, fresh hype clips (strongest spike first) go ahead
 of viewer clips, with their own render slot (one rendered hype clip waiting at a time) so a full backlog never
@@ -195,3 +203,14 @@ Edits to `config.json` take effect next cycle — no restart needed.
   missed the algorithm; delete it, change the title, re-upload on a different day (their 47-view flop went to
   ~6M on the re-upload). Built as the tracker's DELETE + repost flag; renders are deleted after upload, so a
   repost re-downloads the Twitch clip.
+- 2026-11-19: User feedback: a BrycexD clip (scrolling an in-game phone, asking chat about a stock ticker) made no
+  sense to a stranger, and chat spikes can come from the streamer asking chat a question. Added plan_edit's clarity
+  score + the hype reaction gate. Score test on 11 known clips ($0.004): every bad one scored 2-3 (BrycexD 3, Lacy
+  giveaway 2, Lacy driving 2, Elajjaz radio 2, jasontheween cutscene skip 2, xQc menu talk 3, caseoh_ seaplane 3);
+  decent ones 5-7 (Quin69 5, MissMikkaa swamp monster 5, king_wolfe_ sharks 6, LIRIK jet-ski dog 7). Threshold set
+  to 5. The biggest hype spike of the day (Lacy x13.9) was a giveaway — chat volume alone is not a moment.
+- 2026-11-19: Reaction-gate dry run (12 min, 15 chats, mid-afternoon): 26 raw spikes, 4 passed. Ignored ones were
+  polls ("1" x82 on Lacy, "no" x42 on stableronaldo, "me" x42 on RealKatieB), giveaway/copypasta spam ("delights"
+  x121), emote spam and chat banter (<10% reactions). Passed ones were laughing chats at 35-48% reactions (KEKW/ICANT,
+  Pog, lol/lul/lmao, "???"). "lol" and "LOLW" were missing from the laugh list (IShowSpeed and Quin69 laughing
+  chats scored 16-22%) — added, plus HUH and OOOO. Expect roughly 1 in 6 raw spikes to pass.

@@ -157,9 +157,18 @@ def process(conn, cfg):
                                  cfg.get("edit_max_seconds", 20), recent_hooks=recent,
                                  previous_titles=[b["title"] for b in before if b["title"]])
                 clip_db.update(conn, cid, trim_start=plan.start, trim_end=plan.end, hook=plan.hook,
-                               tags=json.dumps(plan.tags), yt_title=plan.title)
-                log.info(f"Edit plan [{plan.note}, ${plan.cost:.4f}] {plan.start:.1f}-{plan.end:.1f}s "
-                         f"hook={plan.hook!r} title={plan.title!r}")
+                               tags=json.dumps(plan.tags), yt_title=plan.title,
+                               moment_score=plan.score, moment=plan.what_happens)
+                min_score = cfg.get("min_moment_score", 6)
+                if plan.score is not None and plan.score < min_score:
+                    # Not obvious what happens (talking to chat, menus, inside joke...): don't spend a slot on it.
+                    clip_db.update(conn, cid, status="skipped", error=f"not a clear moment ({plan.score}/10): {plan.what_happens}")
+                    _remove(row["source_path"])
+                    _remove(row["transcript_path"])
+                    log.info(f"Passed on {row['broadcaster_name']} [{plan.score}/10, ${plan.cost:.4f}]: {plan.what_happens}")
+                    continue
+                log.info(f"Edit plan [{plan.note}, ${plan.cost:.4f}] {plan.score}/10 {plan.what_happens!r} "
+                         f"{plan.start:.1f}-{plan.end:.1f}s hook={plan.hook!r} title={plan.title!r}")
                 row = clip_db.get(conn, cid)
             if row["status"] == "transcribed":
                 out = render(Path(row["source_path"]), Path(row["transcript_path"]), row["broadcaster_name"],

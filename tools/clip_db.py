@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS clips (
     tags             TEXT,          -- JSON list of clip-specific tags
     hype_score       REAL,          -- source='hype': chat spike size (x normal level)
     reposts          INTEGER DEFAULT 0,  -- times re-uploaded after a flop (source becomes 'repost')
+    moment_score     INTEGER,       -- plan_edit's 1-10: does a stranger get it right away? (< min_moment_score = skipped)
+    moment           TEXT,          -- plan_edit's one-sentence "what visibly happens"
     error            TEXT,
     attempts         INTEGER DEFAULT 0,
     discovered_at    TEXT,
@@ -101,7 +103,8 @@ def connect() -> sqlite3.Connection:
     # Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them to an existing DB.
     existing = {r["name"] for r in conn.execute("PRAGMA table_info(clips)")}
     for col, kind in (("safety", "TEXT"), ("spoiler", "INTEGER"), ("trim_start", "REAL"), ("trim_end", "REAL"),
-                      ("hook", "TEXT"), ("tags", "TEXT"), ("hype_score", "REAL"), ("reposts", "INTEGER DEFAULT 0")):
+                      ("hook", "TEXT"), ("tags", "TEXT"), ("hype_score", "REAL"), ("reposts", "INTEGER DEFAULT 0"),
+                      ("moment_score", "INTEGER"), ("moment", "TEXT")):
         if col not in existing:
             conn.execute(f"ALTER TABLE clips ADD COLUMN {col} {kind}")
     conn.commit()
