@@ -97,7 +97,8 @@ re-planned with a **new title and hook** (plan_edit is told the old ones), and u
 repost per clip; a repost that flops too shows "Flopped twice (leave it)". Deleting a Short the tracker didn't flag
 does nothing. If the streamer deleted the Twitch clip, the repost fails 3 times and is marked `failed`.
 The 48h clock starts when the tracker first sees a Short public (YouTube's `publishedAt` isn't reliable for
-private→public videos), so a verdict can come a few hours late but never early.
+private→public videos), so a verdict can come a few hours late but never early. Making a Short private again resets
+that clock, so time spent private never counts against it.
 | `max_uploads_per_day` | 5 | Counted from each day's `upload_window` start (local midnight if no window). First-two-weeks plan (from 2026-11-19): 5/day, then raise if views per Short hold |
 | `max_uploads_per_streamer_per_day` | 2 | Keeps the feed varied |
 | `min_minutes_between_uploads` | 150 | Spacing; ≈ window length / max_uploads_per_day |

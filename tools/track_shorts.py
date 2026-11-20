@@ -129,6 +129,8 @@ def refresh(conn, cfg, youtube) -> list[str]:
         if s["privacy"] == "public" and not s["public_since"]:
             # First time we see it public. Erring late only delays a verdict, never deletes early.
             s["public_since"] = clip_db.now_iso()
+        elif s["privacy"] != "public":
+            s["public_since"] = None  # pulled back to private: the 2-day clock restarts if it goes public again
         hours = (now - clip_db.parse_iso(s["public_since"])).total_seconds() / 3600 if s["public_since"] else None
         for h in SNAPSHOT_HOURS:
             if hours is not None and hours >= h and s[f"views_{h}h"] is None:
