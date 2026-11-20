@@ -85,11 +85,14 @@ def expire_stale(conn, cfg):
 
 def by_priority(rows, hype_open: bool) -> list:
     """Fresh hype clips first (strongest chat spike first) while hype upload slots remain; then reposts of flops
-    you deleted (oldest first); then most-viewed clips.
+    you deleted (oldest first); then most-viewed clips. Within each group a higher plan_edit moment score goes first
+    (only known once a clip is planned, so it mostly orders the rendered backlog at upload time).
     With no hype slots left, hype clips are dropped from consideration so they don't clog the render backlog."""
-    hype = sorted((r for r in rows if r["source"] == "hype"), key=lambda r: -(r["hype_score"] or 0))
+    hype = sorted((r for r in rows if r["source"] == "hype"),
+                  key=lambda r: (-(r["moment_score"] or 0), -(r["hype_score"] or 0)))
     reposts = sorted((r for r in rows if r["source"] == "repost"), key=lambda r: r["updated_at"] or "")
-    rest = sorted((r for r in rows if r["source"] not in ("hype", "repost")), key=lambda r: -(r["view_count"] or 0))
+    rest = sorted((r for r in rows if r["source"] not in ("hype", "repost")),
+                  key=lambda r: (-(r["moment_score"] or 0), -(r["view_count"] or 0)))
     return (hype if hype_open else []) + reposts + rest
 
 

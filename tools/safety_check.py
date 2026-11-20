@@ -38,7 +38,7 @@ Also REJECT if the transcript is sexually explicit.
 
 These are FINE (normal for the game, do not reject): shootouts, explosions, car crashes, police chases, ordinary blood, fistfights, swearing, drinking or smoking, swimwear or revealing outfits in ordinary non-sexual scenes (beach, pool, walking around), dark humor.
 
-Separately, decide if the clip is a STORY SPOILER: it shows a main-story cutscene or main-story mission moment (plot events, character reveals, deaths, betrayals, twists, endings - including the prologue/opening story scenes). Free-roam gameplay, driving, chaos, side activities, menus, and the streamer just reacting to the map or graphics are NOT spoilers.
+Separately, decide if the clip is a STORY SPOILER: it reveals something about the main story's plot - a scripted story cutscene, or a story character's death, betrayal, twist, reveal or ending (including the prologue/opening story scenes). Gameplay is NOT a spoiler, even if it happens during a story mission: driving, crashes, falls, chases, shootouts, flying, swimming, animals, chaos and fails, side activities, menus, and the streamer reacting to the map or graphics. When unsure, it is not a spoiler.
 
 Reply with exactly one line, one of:
 OK

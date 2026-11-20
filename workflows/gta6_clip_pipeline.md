@@ -214,3 +214,11 @@ Edits to `config.json` take effect next cycle — no restart needed.
   x121), emote spam and chat banter (<10% reactions). Passed ones were laughing chats at 35-48% reactions (KEKW/ICANT,
   Pog, lol/lul/lmao, "???"). "lol" and "LOLW" were missing from the laugh list (IShowSpeed and Quin69 laughing
   chats scored 16-22%) — added, plus HUH and OOOO. Expect roughly 1 in 6 raw spikes to pass.
+- 2026-11-19: User's favorite Shorts so far ("the exact type of clips we want"): caseoh_ tumbling off a mobility
+  scooter into a canal, and Jynxzi's first plane flight crashing into the woods. Pattern: one simple thing goes
+  visibly wrong, payoff at the end, works on mute. The scorer had them at 5-6, so plan_edit now names them as the
+  8-10 example and scores only the cut window (junk elsewhere in a raw 30s hype clip no longer drags a good moment
+  down). Re-test: favorites 8/10, bad clips still 2, borderline 4-6. Upload order now prefers the higher score.
+- 2026-11-19: The spoiler flag fired on gameplay during story missions (scooter fall, sharks, swamp monster: 3 of
+  the first 6 uploads). Narrowed to plot reveals only (story cutscenes, character deaths/twists/endings); a real
+  rooftop story cutscene is still flagged.

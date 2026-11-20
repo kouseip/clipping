@@ -35,15 +35,15 @@ MIN_WINDOW = 6.0
 SCHEMA = {
     "type": "object",
     "properties": {
-        "what_happens": {"type": "string"},
-        "score": {"type": "integer"},
         "start": {"type": "number"},
         "end": {"type": "number"},
+        "what_happens": {"type": "string"},
+        "score": {"type": "integer"},
         "hook": {"type": "string"},
         "title": {"type": "string"},
         "tags": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["what_happens", "score", "start", "end", "hook", "title", "tags"],
+    "required": ["start", "end", "what_happens", "score", "hook", "title", "tags"],
     "additionalProperties": False,
 }
 
@@ -51,19 +51,19 @@ SCHEMA = {
 def _system(max_seconds: float) -> str:
     return f"""You edit Twitch clips of streamers playing GTA 6 into YouTube Shorts. Viewers decide in 2 seconds whether to swipe away, and Shorts that people watch to the end get pushed. You get timestamped frames and a timestamped transcript of one clip.
 
-0. FIRST, JUDGE THE CLIP. The viewer has never seen this stream, can't see chat, and gets only the clip, captions and a short hook. Only clips where it's obvious what happened are worth posting.
-- what_happens: one plain sentence saying what visibly happens, the way you'd tell a friend ("his car flips off a ramp into a pool and he screams"). Describe what you can actually see and hear, not what the clip title claims.
-- score (1-10), how likely a GTA fan scrolling Shorts gets it right away and watches to the end:
-  1-3: nothing notable happens on screen (walking or driving around, menus, maps, the phone, loading, character creation, a cutscene with no reaction); OR the streamer is mostly talking to chat (answering questions, polls, reading donations, subs, giveaways, plugging things, setting something up); OR the point depends on context the viewer doesn't have (an inside joke, something earlier in the stream, chat messages, something off screen); OR you can't tell what happened.
-  4-5: something happens but it's mild, slow, or hard to follow without context.
-  6-7: a clear moment a stranger understands in seconds: funny, shocking, impressive, chaotic or a big fail, or a clearly funny reaction to something visible.
-  8-10: a great moment people would send to a friend.
-  Be strict: most random clips are a 3-5. If you can't write a concrete what_happens, the score is 3 or lower.
-
 1. WINDOW (start, end in seconds): pick the best continuous part of the clip.
 - Between 10 and {max_seconds:.0f} seconds long, never longer. If the whole clip is already short, keep most of it but cut dead air at the start.
 - END right after the payoff: the funny, impressive or shocking moment plus the streamer's immediate reaction. Don't end mid-sentence.
 - START as late as possible while keeping the setup needed to understand the payoff. Don't start mid-sentence.
+
+JUDGE THE SHORT YOU JUST CUT (only your window counts; junk outside it doesn't matter). The viewer has never seen this stream, can't see chat, and gets only the Short, captions and a short hook. Only Shorts where it's obvious what happened are worth posting.
+- what_happens: one plain sentence saying what visibly happens in the window, the way you'd tell a friend ("his car flips off a ramp into a pool and he screams"). Describe what you can actually see and hear, not what the clip title claims.
+- score (1-10), how likely a GTA fan scrolling Shorts gets it right away and watches to the end:
+  1-3: nothing notable happens on screen (walking or driving around, menus, maps, the phone, loading, character creation, a cutscene with no reaction); OR the streamer is mostly talking to chat (answering questions, polls, reading donations, subs, giveaways, plugging things, setting something up); OR the point depends on context the viewer doesn't have (an inside joke, something earlier in the stream, chat messages, something off screen); OR you can't tell what happened.
+  4-5: something happens but it's mild, slow, muddled, or hard to follow without context.
+  6-7: a clear moment a stranger understands in seconds: funny, shocking, impressive, chaotic or a big fail, or a clearly funny reaction to something visible.
+  8-10: exactly what this channel wants. Its two best Shorts so far: a streamer on a mobility scooter rides along a canal and tumbles into the water; a first-time pilot flies a small plane low over the trees and crashes into the woods ("wasted"). What they share: the player tries one simple thing, it goes visibly wrong (a fail, a crash, chaos), the payoff lands at the end, and a stranger gets it in seconds even with the sound off.
+  Be strict: most random clips are a 3-5. If you can't write a concrete what_happens, the score is 3 or lower.
 
 2. HOOK: 3-6 words shown on screen from the first frame to stop people scrolling. Make them curious about what's coming without giving away the ending. Plain words only: no emoji, no hashtags, no quotation marks. Advertiser-friendly. No story spoilers. Vary the style from clip to clip (a question, a bold claim, a reaction, a dare) and don't reuse the pattern of any recent hook you're shown. Examples of different styles: HE DID NOT SEE THAT COMING / THIS NPC HAD ENOUGH / NOBODY TOLD HIM ABOUT SHARKS / IS THIS EVEN LEGAL
 
